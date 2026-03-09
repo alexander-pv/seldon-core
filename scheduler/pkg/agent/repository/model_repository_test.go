@@ -213,7 +213,7 @@ func TestDownloadModelBackoffRetry(t *testing.T) {
 			mr := NewModelRepository(logger, rcloneMock,
 				repoPath, modelRepoHandlerMock, "0.0.0.0", 9000, 2*time.Second)
 
-			folder, err := mr.DownloadModelVersion(context.Background(), test.modelName, test.modelVersion, test.modelSpec, test.config)
+			folder, err := mr.DownloadModelVersion(context.Background(), test.modelName, test.modelVersion, 0, test.modelSpec, test.config)
 			if test.expect.error {
 				g.Expect(err).To(HaveOccurred())
 				return
@@ -462,7 +462,7 @@ func TestDownloadModelVersion(t *testing.T) {
 			modelRepoPath := t.TempDir()
 			mr := NewModelRepository(logger, rcloneClient, modelRepoPath,
 				mlserver.NewMLServerRepositoryHandler(logger), "0.0.0.0", 9000, time.Second)
-			chosenFolder, err := mr.DownloadModelVersion(context.Background(), test.modelName, test.modelVersion, test.modelSpec, nil)
+			chosenFolder, err := mr.DownloadModelVersion(context.Background(), test.modelName, test.modelVersion, 0, test.modelSpec, nil)
 
 			if test.error {
 				g.Expect(err).ToNot(BeNil())

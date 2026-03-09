@@ -77,7 +77,7 @@ func (f *FakeModelRepository) GetModelRuntimeInfo(modelName string) (*pbs.ModelR
 	return &pbs.ModelRuntimeInfo{ModelRuntimeInfo: &pbs.ModelRuntimeInfo_Mlserver{Mlserver: &pbs.MLServerModelSettings{ParallelWorkers: uint32(1)}}}, nil
 }
 
-func (f *FakeModelRepository) DownloadModelVersion(ctx context.Context, modelName string, version uint32, modelSpec *pbs.ModelSpec, config []byte) (*string, error) {
+func (f *FakeModelRepository) DownloadModelVersion(ctx context.Context, modelName string, version uint32, generation uint32, modelSpec *pbs.ModelSpec, config []byte) (*string, error) {
 	f.modelDownloads++
 	if f.err != nil {
 		return nil, f.err
@@ -241,7 +241,7 @@ func TestAgentServiceManagerAutoScalingDisabled(t *testing.T) {
 			1*time.Minute,
 			1*time.Minute,
 			1*time.Minute,
-			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 		logger, modelRepository, v2Client,
 		replicaConfig, "default",
 		rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, false)
@@ -310,7 +310,7 @@ func TestAgentServiceManagerCreate(t *testing.T) {
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client,
 				test.replicaConfig, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
@@ -367,7 +367,7 @@ func TestNotInStartUpPhaseIfSchedulerConnLost(t *testing.T) {
 			1*time.Minute,
 			1*time.Minute,
 			1*time.Minute,
-			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 		logger, modelRepository, v2Client,
 		&pb.ReplicaConfig{}, "default",
 		rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
@@ -455,7 +455,7 @@ func TestHandleSchedulerSubscription(t *testing.T) {
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client,
 				&pb.ReplicaConfig{}, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
@@ -643,7 +643,7 @@ func TestLoadModel(t *testing.T) {
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client, test.replicaConfig, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
 
@@ -815,7 +815,7 @@ parameters:
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1, 1, 1, true, tls.TLSOptions{}),
+					1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository,
 				v2Client, test.replicaConfig, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService,
@@ -979,7 +979,7 @@ func TestUnloadModel(t *testing.T) {
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client, test.replicaConfig, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
 			mockAgentV2Server := &mockAgentV2Server{models: []string{}}
@@ -1053,7 +1053,7 @@ func TestAgentServiceManagerClose(t *testing.T) {
 			1*time.Minute,
 			1*time.Minute,
 			1*time.Minute,
-			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+			1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 		logger, modelRepository, v2Client,
 		&pb.ReplicaConfig{MemoryBytes: 1000}, "default",
 		rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
@@ -1152,7 +1152,7 @@ func TestReadinessServiceAgentSync(t *testing.T) {
 			maxTimeAfterStart,
 			1*time.Minute,
 			1*time.Minute,
-			1, 1, 1, true, tls.TLSOptions{}),
+			1, 1, 1, true, tls.TLSOptions{}, false),
 		logger, modelRepository,
 		v2Client,
 		&pb.ReplicaConfig{MemoryBytes: 1000}, "default",
@@ -1341,7 +1341,7 @@ func TestAgentReadiness(t *testing.T) {
 					maxTimeBeforeStart,
 					maxTimeAfterStart,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository,
 				v2Client,
 				&pb.ReplicaConfig{MemoryBytes: 1000}, "default",
@@ -1470,7 +1470,7 @@ func TestAgentStopOnSubServicesFailure(t *testing.T) {
 					maxTimeBeforeStart,
 					maxTimeAfterStart,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client,
 				&pb.ReplicaConfig{MemoryBytes: 1000}, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
@@ -1631,7 +1631,7 @@ func TestUnloadModelOutOfOrder(t *testing.T) {
 					1*time.Minute,
 					1*time.Minute,
 					1*time.Minute,
-					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}),
+					1*time.Minute, 1, 1, 1, true, tls.TLSOptions{}, false),
 				logger, modelRepository, v2Client, &pb.ReplicaConfig{MemoryBytes: 1000}, "default",
 				rpHTTP, rpGRPC, agentDebug, modelScalingService, drainerService, readinessService, newFakeMetricsHandler(), k8sExtendedClient, true)
 			mockAgentV2Server := &mockAgentV2Server{models: []string{}}

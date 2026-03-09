@@ -127,6 +127,7 @@ func setupLocalTestManagerWithState(
 		uint64(capacity),
 		overCommitPercentage,
 		newFakeMetricsHandler(),
+		false, // useLogicalNameModelLayout
 	)
 	return manager, v2ClientState
 }
