@@ -39,7 +39,7 @@ type ModelRepositoryHandler interface {
 }
 
 type ModelRepository interface {
-	DownloadModelVersion(ctx context.Context, modelName string, version uint32, modelSpec *scheduler.ModelSpec, config []byte) (*string, error)
+	DownloadModelVersion(ctx context.Context, modelName string, version uint32, generation uint32, modelSpec *scheduler.ModelSpec, config []byte) (*string, error)
 	RemoveModelVersion(modelName string) error
 	GetModelRuntimeInfo(modelName string) (*scheduler.ModelRuntimeInfo, error)
 	Ready() error
@@ -83,9 +83,11 @@ func (r *V2ModelRepository) DownloadModelVersion(
 	ctx context.Context,
 	modelName string,
 	version uint32,
+	generation uint32,
 	modelSpec *scheduler.ModelSpec,
 	config []byte,
 ) (modelVersionFolderPtr *string, err error) {
+	_ = generation // unused in versioned layout; used by V2ModelRepositoryLogicalLayout
 	logger := r.logger.WithField("func", "DownloadModelVersion")
 
 	// Setup key vars

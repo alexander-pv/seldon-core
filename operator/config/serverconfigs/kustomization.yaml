@@ -1,6 +1,7 @@
 resources:
 - mlserver.yaml
 - triton.yaml
+- tritonv2.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
@@ -14,5 +15,8 @@ images:
   newName: seldonio/seldon-rclone
   newTag: latest
 - name: triton
+  newName: nvcr.io/nvidia/tritonserver
+  newTag: 23.03-py3
+- name: tritonv2
   newName: nvcr.io/nvidia/tritonserver
   newTag: 23.03-py3

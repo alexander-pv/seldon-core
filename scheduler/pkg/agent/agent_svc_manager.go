@@ -108,6 +108,7 @@ type AgentServiceConfig struct {
 	unloadGraceTime                          time.Duration
 	runningInK8s                             bool
 	tlsOptions                               seldontls.TLSOptions
+	useLogicalNameModelLayout                bool
 }
 
 func NewAgentServiceConfig(
@@ -126,6 +127,7 @@ func NewAgentServiceConfig(
 	unloadGraceTime time.Duration,
 	runningInK8s bool,
 	tlsOptions seldontls.TLSOptions,
+	useLogicalNameModelLayout bool,
 ) *AgentServiceConfig {
 	return &AgentServiceConfig{
 		serverName:                               serverName,
@@ -143,6 +145,7 @@ func NewAgentServiceConfig(
 		unloadGraceTime:                          unloadGraceTime,
 		runningInK8s:                             runningInK8s,
 		tlsOptions:                               tlsOptions,
+		useLogicalNameModelLayout:                useLogicalNameModelLayout,
 	}
 }
 
@@ -179,7 +182,7 @@ func NewAgentServiceManager(
 	modelState := NewModelState()
 
 	stateManager := NewLocalStateManager(
-		modelState, logger, v2Client, replicaConfig.GetMemoryBytes(), replicaConfig.GetOverCommitPercentage(), metrics)
+		modelState, logger, v2Client, replicaConfig.GetMemoryBytes(), replicaConfig.GetOverCommitPercentage(), metrics, agentConfig.useLogicalNameModelLayout)
 
 	agentDebugService.SetState(stateManager)
 	reverseProxyHTTP.SetState(stateManager)
@@ -686,8 +689,12 @@ func (am *AgentServiceManager) LoadModel(request *agent_pb.ModelOperationMessage
 	modelWithVersion := util.GetVersionedModelName(modelName, modelVersion)
 	pinnedModelVersion := util.GetPinnedModelVersion()
 
-	am.stateManager.cache.Lock(modelWithVersion)
-	defer am.stateManager.cache.Unlock(modelWithVersion)
+	lockKey := modelWithVersion
+	if am.agentConfig.useLogicalNameModelLayout {
+		lockKey = modelName
+	}
+	am.stateManager.cache.Lock(lockKey)
+	defer am.stateManager.cache.Unlock(lockKey)
 
 	logger.Infof("Load model %s:%d", modelName, modelVersion)
 	// if it is out of order message, ignore it
@@ -712,6 +719,7 @@ func (am *AgentServiceManager) LoadModel(request *agent_pb.ModelOperationMessage
 		context.TODO(),
 		modelWithVersion,
 		pinnedModelVersion,
+		modelVersion, // generation for logical-layout servers (e.g. tritonv2)
 		request.GetModelVersion().GetModel().GetModelSpec(),
 		config,
 	)
@@ -781,8 +789,12 @@ func (am *AgentServiceManager) UnloadModel(request *agent_pb.ModelOperationMessa
 	modelWithVersion := util.GetVersionedModelName(modelName, modelVersion)
 	pinnedModelVersion := util.GetPinnedModelVersion()
 
-	am.stateManager.cache.Lock(modelWithVersion)
-	defer am.stateManager.cache.Unlock(modelWithVersion)
+	lockKey := modelWithVersion
+	if am.agentConfig.useLogicalNameModelLayout {
+		lockKey = modelName
+	}
+	am.stateManager.cache.Lock(lockKey)
+	defer am.stateManager.cache.Unlock(lockKey)
 
 	logger.Infof("Unload model %s:%d", modelName, modelVersion)
 	// if it is out of order message, ignore it

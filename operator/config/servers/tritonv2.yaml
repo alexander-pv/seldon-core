@@ -1,0 +1,8 @@
+# Triton v2 Server: logical model names + version folders. Uses serverConfig: tritonv2.
+apiVersion: mlops.seldon.io/v1alpha1
+kind: Server
+metadata:
+  name: tritonv2
+spec:
+  serverConfig: tritonv2
+  replicas: 1

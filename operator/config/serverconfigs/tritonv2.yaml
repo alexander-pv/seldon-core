@@ -1,0 +1,242 @@
+---
+# Triton v2 ServerConfig: logical model names + version folders on disk.
+# Uses same images as triton; agent must be built with tritonv2 support (SELDON_SERVER_TYPE=tritonv2).
+apiVersion: mlops.seldon.io/v1alpha1
+kind: ServerConfig
+metadata:
+  name: tritonv2
+spec:
+  podSpec:
+    terminationGracePeriodSeconds: 120
+    serviceAccountName: seldon-server
+    containers:
+    - image: rclone:latest
+      imagePullPolicy: IfNotPresent
+      name: rclone
+      command:
+        - rclone
+      args:
+        - rcd
+        - --rc-no-auth
+        - --config=/rclone/rclone.conf
+        - --rc-addr=0.0.0.0:5572
+        - --max-buffer-memory=$(MAX_BUFFER_MEMORY)
+      env:
+        - name: MAX_BUFFER_MEMORY
+          value: "64M"
+      ports:
+      - containerPort: 5572
+        name: rclone
+        protocol: TCP
+      lifecycle:
+        preStop:
+          httpGet:
+            port: 9007
+            path: terminate
+      resources:
+        limits:
+          memory: '256M'
+        requests:
+          cpu: "200m"
+          memory: '100M'
+      readinessProbe:
+        failureThreshold: 3
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        tcpSocket:
+          port: 5572
+        timeoutSeconds: 1
+      livenessProbe:
+        failureThreshold: 1
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        exec:
+          command:
+            - rclone
+            - rc
+            - rc/noop
+        timeoutSeconds: 1
+      volumeMounts:
+      - mountPath: /mnt/agent
+        name: triton-models
+    - image: alrdockerhub/seldon-agent:2.10.6-tritonv2
+      imagePullPolicy: IfNotPresent
+      name: agent
+      command:
+        - /bin/agent
+      args:
+        - --tracing-config-path=/mnt/tracing/tracing.json
+      env:
+      - name: SELDON_SERVER_CAPABILITIES
+        value: "triton,dali,fil,onnx,openvino,python,pytorch,tensorflow,tensorrt"
+      - name: SELDON_OVERCOMMIT_PERCENTAGE
+        value: "10"
+      - name: SELDON_MODEL_INFERENCE_LAG_THRESHOLD
+        value: "30"
+      - name: SELDON_MODEL_INACTIVE_SECONDS_THRESHOLD
+        value: "600"
+      - name: SELDON_SCALING_STATS_PERIOD_SECONDS
+        value: "20"
+      - name: SELDON_SERVER_HTTP_PORT
+        value: "9000"
+      - name: SELDON_SERVER_GRPC_PORT
+        value: "9500"
+      - name: SELDON_REVERSE_PROXY_HTTP_PORT
+        value: "9001"
+      - name: SELDON_REVERSE_PROXY_GRPC_PORT
+        value: "9501"
+      - name: AGENT_TLS_SECRET_NAME
+        value: ""
+      - name: AGENT_TLS_FOLDER_PATH
+        value: ""
+      - name: SELDON_SCHEDULER_HOST
+        value: "seldon-scheduler"
+      - name: SELDON_SCHEDULER_PORT
+        value: "9005"
+      - name: SELDON_METRICS_PORT
+        value: "9006"
+      - name: SELDON_DRAINER_PORT
+        value: "9007"
+      - name: SELDON_READINESS_PORT
+        value: "9008"
+      - name: SELDON_SERVER_TYPE
+        value: "tritonv2"
+      - name: SELDON_LOG_LEVEL
+        value: "warn"
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
+      - name: POD_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: MEMORY_REQUEST
+        valueFrom:
+          resourceFieldRef:
+            containerName: triton
+            resource: requests.memory
+      - name: SELDON_USE_DEPLOYMENTS_FOR_SERVERS
+        value: "false"
+      ports:
+      - containerPort: 9501
+        name: grpc
+        protocol: TCP
+      - containerPort: 9001
+        name: http
+        protocol: TCP
+      - containerPort: 9006
+        name: metrics
+        protocol: TCP
+      - containerPort: 9008
+        name: readiness-port
+      lifecycle:
+        preStop:
+          httpGet:
+            port: 9007
+            path: terminate
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 9008
+        failureThreshold: 1
+        periodSeconds: 5
+      startupProbe:
+        httpGet:
+          path: /ready
+          port: 9008
+        failureThreshold: 60
+        periodSeconds: 15
+      resources:
+        requests:
+          cpu: "500m"
+          memory: '500M'
+      volumeMounts:
+      - mountPath: /mnt/agent
+        name: triton-models
+      - name: config-volume
+        mountPath: /mnt/config
+      - name: tracing-config-volume
+        mountPath: /mnt/tracing
+    - image: triton:latest
+      command:
+      - bash
+      args:
+      - -c
+      - tritonserver --model-repository=$(SERVER_MODELS_DIR) --http-port=$(SERVER_HTTP_PORT) --grpc-port=$(SERVER_GRPC_PORT) --log-verbose=1 --model-control-mode=explicit --backend-config=python,shm-default-byte-size=16777216
+      imagePullPolicy: IfNotPresent
+      env:
+      - name: SERVER_HTTP_PORT
+        value: "9000"
+      - name: SERVER_GRPC_PORT
+        value: "9500"
+      - name: SERVER_MODELS_DIR
+        value: "/mnt/agent/models"
+      - name: LD_PRELOAD
+        value: /usr/lib/x86_64-linux-gnu/libtcmalloc.so.4
+      resources:
+        requests:
+          cpu: 1
+          memory: '1G'
+      livenessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: server-http
+      readinessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: server-http
+        initialDelaySeconds: 5
+        periodSeconds: 5
+      startupProbe:
+        httpGet:
+          path: /v2/health/live
+          port: server-http
+        failureThreshold: 10
+        periodSeconds: 10
+      name: triton
+      ports:
+      - containerPort: 9500
+        name: server-grpc
+        protocol: TCP
+      - containerPort: 9000
+        name: server-http
+        protocol: TCP
+      - containerPort: 8002
+        name: server-metrics
+      lifecycle:
+        preStop:
+          httpGet:
+            port: 9007
+            path: terminate
+      volumeMounts:
+      - mountPath: /mnt/agent
+        name: triton-models
+        readOnly: true
+      - mountPath: /dev/shm
+        name: dshm
+        readOnly: false
+    securityContext:
+      fsGroup: 2000
+      runAsUser: 1000
+      runAsNonRoot: true
+    volumes:
+    - name: config-volume
+      configMap:
+        name: seldon-agent
+    - name: tracing-config-volume
+      configMap:
+        name: seldon-tracing
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: "256Mi"
+  volumeClaimTemplates:
+  - name: triton-models
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi

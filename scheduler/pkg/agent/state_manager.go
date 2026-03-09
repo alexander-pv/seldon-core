@@ -20,6 +20,7 @@ import (
 	cache "github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/cache"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/interfaces"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/metrics"
+	"github.com/seldonio/seldon-core/scheduler/v2/pkg/util"
 )
 
 const (
@@ -37,8 +38,9 @@ type LocalStateManager struct {
 	// because of race conditions we might occasionally go into negative memory
 	availableMainMemoryBytes int64
 	// lock for `availableMainMemoryBytes`
-	mu      sync.RWMutex
-	metrics metrics.AgentMetricsHandler
+	mu                         sync.RWMutex
+	metrics                    metrics.AgentMetricsHandler
+	useLogicalNameModelLayout bool // when true, call Load/Unload with logical name (e.g. model-a) not versioned (model-a_2)
 }
 
 // this should be called from control plane (if directly)
@@ -90,7 +92,8 @@ func (manager *LocalStateManager) LoadModelVersion(modelVersionDetails *agent.Mo
 		return err
 	}
 
-	if err := manager.v2Client.LoadModel(modelId); err != nil {
+	backendModelId := manager.backendModelId(modelId)
+	if err := manager.v2Client.LoadModel(backendModelId); err != nil {
 		if _, err := manager.modelVersions.removeModelVersion(modelVersionDetails); err != nil {
 			manager.logger.WithError(err).Warnf("Model removing failed %s", modelId)
 		}
@@ -102,7 +105,7 @@ func (manager *LocalStateManager) LoadModelVersion(modelVersionDetails *agent.Mo
 
 	if err := manager.cache.AddDefault(modelId); err != nil {
 		manager.logger.WithError(err).Infof("Cannot load model %s, aborting", modelId)
-		if err := manager.v2Client.UnloadModel(modelId); err != nil {
+		if err := manager.v2Client.UnloadModel(backendModelId); err != nil {
 			manager.logger.WithError(err.Err).Warnf("Model unload failed %s", modelId)
 		}
 		if err := manager.updateAvailableMemory(memBytesToLoad, false); err != nil {
@@ -135,14 +138,21 @@ func (manager *LocalStateManager) UnloadModelVersion(modelVersionDetails *agent.
 		return nil
 	}
 
-	if manager.cache.Exists(modelId, false) {
+	skipTritonUnload := manager.useLogicalNameModelLayout && manager.modelVersions.hasOtherVersionOfLogicalModel(modelId)
+	if skipTritonUnload {
+		manager.logger.Infof("Skipping backend Unload for %s (another version of same logical model still loaded)", modelId)
+	}
 
-		if err := manager.v2Client.UnloadModel(modelId); err != nil {
+	if manager.cache.Exists(modelId, false) {
+		if !skipTritonUnload {
+			backendModelId := manager.backendModelId(modelId)
+			if err := manager.v2Client.UnloadModel(backendModelId); err != nil {
 			if err.IsNotFound() {
 				manager.logger.Warnf("Model is not found on server %s", modelId)
 			} else {
 				manager.logger.WithError(err.Err).Errorf("Cannot unload model %s from server", modelId)
 				return err.Err
+			}
 			}
 		}
 
@@ -151,20 +161,24 @@ func (manager *LocalStateManager) UnloadModelVersion(modelVersionDetails *agent.
 			manager.logger.WithError(err).Errorf("Delete model %s from cache failed", modelId)
 			return err
 		}
-		memBytes, err := manager.modelVersions.getModelMemoryBytes(modelId)
+		if !skipTritonUnload {
+			memBytes, err := manager.modelVersions.getModelMemoryBytes(modelId)
 		if err != nil {
 			manager.logger.WithError(err).Errorf("Failed to get memory details for model %s", modelId)
 		}
 
-		if err := manager.updateAvailableMemory(memBytes, false); err != nil {
-			manager.logger.WithError(err).Errorf("Could not update memory for model %s", modelId)
-			return err
-		}
+			if err := manager.updateAvailableMemory(memBytes, false); err != nil {
+				manager.logger.WithError(err).Errorf("Could not update memory for model %s", modelId)
+				return err
+			}
 
-		manager.logger.Infof("Removed model from cache %s", modelId)
-		go manager.metrics.AddLoadedModelMetrics(modelId, memBytes, false, false)
+			manager.logger.Infof("Removed model from cache %s", modelId)
+			go manager.metrics.AddLoadedModelMetrics(modelId, memBytes, false, false)
+		}
 	} else {
-		go manager.metrics.AddLoadedModelMetrics(modelId, 0, false, false) // model already out of memory
+		if !skipTritonUnload {
+			go manager.metrics.AddLoadedModelMetrics(modelId, 0, false, false) // model already out of memory
+		}
 	}
 
 	if _, err := manager.modelVersions.removeModelVersion(modelVersionDetails); err != nil {
@@ -204,7 +218,8 @@ func (manager *LocalStateManager) EnsureLoadModel(modelId string) error {
 			return err
 		}
 
-		if err := manager.v2Client.LoadModel(modelId); err != nil {
+		backendModelId := manager.backendModelId(modelId)
+		if err := manager.v2Client.LoadModel(backendModelId); err != nil {
 			manager.logger.WithError(err.Err).Errorf("Cannot reload %s", modelId)
 			if err := manager.updateAvailableMemory(modelMemoryBytes, false); err != nil {
 				manager.logger.WithError(err).Warnf("Could not update memory %s", modelId)
@@ -333,7 +348,7 @@ func (manager *LocalStateManager) makeRoomIfNeeded(modelId string, modelMemoryBy
 			continue
 		}
 
-		if err := manager.v2Client.UnloadModel(evictedModelId); err != nil {
+		if err := manager.v2Client.UnloadModel(manager.backendModelId(evictedModelId)); err != nil {
 			// if we get 404 assume that the model has been unloaded
 			// by a concurrent request or could be that underlying server got restarted!
 			// in these cases we rectify agent view and proceed.
@@ -366,6 +381,24 @@ func (manager *LocalStateManager) makeRoomIfNeeded(modelId string, modelMemoryBy
 	return nil
 }
 
+// ModelNameForInferenceBackend returns the model name to send to the inference backend on the
+// data plane (HTTP path and gRPC ModelName/Name). When useLogicalNameModelLayout is true we return
+// the logical name (e.g. for Triton v2); otherwise we return the versioned name.
+func (manager *LocalStateManager) ModelNameForInferenceBackend(internalModelName string) string {
+	return manager.backendModelId(internalModelName)
+}
+
+func (manager *LocalStateManager) backendModelId(modelId string) string {
+	if !manager.useLogicalNameModelLayout {
+		return modelId
+	}
+	logicalName, _, err := util.GetOrignalModelNameAndVersion(modelId)
+	if err != nil {
+		return modelId
+	}
+	return logicalName
+}
+
 func NewLocalStateManager(
 	modelVersions *ModelState,
 	logger log.FieldLogger,
@@ -373,20 +406,22 @@ func NewLocalStateManager(
 	totalMainMemoryBytes uint64,
 	overCommitPercentage uint32,
 	metrics metrics.AgentMetricsHandler,
+	useLogicalNameModelLayout bool,
 ) *LocalStateManager {
 	// if we are here it means that it is a fresh instance with no state yet
 	// i.e. should not have any models loaded / cache is empty etc.
 	cacheWithTransaction := cache.NewLRUCacheTransactionManager(logger)
 
 	return &LocalStateManager{
-		v2Client:                 v2Client,
-		logger:                   logger.WithField("Source", "StateManager"),
-		modelVersions:            modelVersions,
-		cache:                    cacheWithTransaction,
-		availableMainMemoryBytes: int64(totalMainMemoryBytes),
-		mu:                       sync.RWMutex{},
-		totalMainMemoryBytes:     totalMainMemoryBytes,
+		v2Client:                  v2Client,
+		logger:                    logger.WithField("Source", "StateManager"),
+		modelVersions:             modelVersions,
+		cache:                     cacheWithTransaction,
+		availableMainMemoryBytes:  int64(totalMainMemoryBytes),
+		mu:                        sync.RWMutex{},
+		totalMainMemoryBytes:      totalMainMemoryBytes,
 		overCommitPercentage:     overCommitPercentage,
-		metrics:                  metrics,
+		metrics:                   metrics,
+		useLogicalNameModelLayout: useLogicalNameModelLayout,
 	}
 }
