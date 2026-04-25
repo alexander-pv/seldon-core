@@ -42,6 +42,26 @@ func NewTritonV2RepositoryHandler(logger log.FieldLogger) *TritonV2RepositoryHan
 	return &TritonV2RepositoryHandler{logger: logger.WithField("name", "TritonV2RepositoryHandler")}
 }
 
+func copyNonConfigFilesToModelRepo(src string, dst string) error {
+	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && src != path { // Don't descend into directories
+			return filepath.SkipDir
+		}
+		// Copy non- config.pbtxt files to dst folder
+		if !info.IsDir() && filepath.Base(path) != TritonConfigFile {
+			err := copy2.Copy(path, filepath.Join(dst, filepath.Base(path)))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return err
+}
+
 // UpdateModelRepository writes config.pbtxt at model level only. Artifacts are already
 // in modelRepoPath/generation/ (copied by the logical-layout repository).
 func (t *TritonV2RepositoryHandler) UpdateModelRepository(modelName string, rclonePath string, isVersionFolder bool, modelRepoPath string) error {
@@ -49,12 +69,24 @@ func (t *TritonV2RepositoryHandler) UpdateModelRepository(modelName string, rclo
 	var configFilePath string
 	if isVersionFolder {
 		t.logger.Infof("Copy files from versioned folder %s to %s", filepath.Dir(rclonePath), modelRepoPath)
+		// copy all non-config.pbtxt files from folder above version to repo folder
+		err := copyNonConfigFilesToModelRepo(filepath.Dir(rclonePath), modelRepoPath)
+		if err != nil {
+			return err
+		}
+		// look for config.pbtxt in folder above of current folder if this is a version folder
 		configFilePath = filepath.Join(filepath.Dir(rclonePath), TritonConfigFile)
 		if _, err := os.Stat(configFilePath); err != nil {
 			return t.createConfigFileWithName(modelName, configFilePathRepo)
 		}
 	} else {
 		t.logger.Infof("Copy files from non-versioned folder %s to %s", rclonePath, modelRepoPath)
+		// copy all non-config.pbtxt files from folder to repo folder
+		err := copyNonConfigFilesToModelRepo(rclonePath, modelRepoPath)
+		if err != nil {
+			return err
+		}
+		// look for config.pbtxt in same folder as model artifacts
 		configFilePath = filepath.Join(rclonePath, TritonConfigFile)
 		if _, err := os.Stat(configFilePath); err != nil {
 			return t.createConfigFileWithName(modelName, configFilePathRepo)
