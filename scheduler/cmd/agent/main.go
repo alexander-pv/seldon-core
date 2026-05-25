@@ -38,6 +38,7 @@ import (
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/repository"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/repository/mlserver"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/repository/triton"
+	"github.com/seldonio/seldon-core/scheduler/v2/pkg/agent/repository/tritonv2"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/metrics"
 	"github.com/seldonio/seldon-core/scheduler/v2/pkg/tracing"
 	"github.com/seldonio/seldon-core/scheduler/v2/version"
@@ -46,6 +47,15 @@ import (
 const (
 	maxBackoffRetryModelDownload = 30 * time.Second
 )
+
+var serverTypesWithLogicalModelLayout = map[string]struct{}{
+	"tritonv2": {},
+}
+
+func serverTypeUsesLogicalModelLayout(serverType string) bool {
+	_, ok := serverTypesWithLogicalModelLayout[serverType]
+	return ok
+}
 
 func makeDirs() (string, string, error) {
 	modelRepositoryDir := filepath.Join(cli.AgentFolder, "models")
@@ -71,6 +81,9 @@ func getRepositoryHandler(logger log.FieldLogger) repository.ModelRepositoryHand
 	case "triton":
 		logger.Infof("Creating Triton repository handler")
 		return triton.NewTritonRepositoryHandler(logger)
+	case "tritonv2":
+		logger.Infof("Creating TritonV2 repository handler (logical naming + version folders)")
+		return tritonv2.NewTritonV2RepositoryHandler(logger)
 	default:
 		logger.Infof("Using default as no server type requested - creating MLServer repository handler")
 		return mlserver.NewMLServerRepositoryHandler(logger)
@@ -197,15 +210,28 @@ func main() {
 	rcloneClient := rclone.NewRCloneClient(cli.RcloneHost, cli.RclonePort, rcloneRepositoryDir, logger, cli.Namespace, agentConfigHandler)
 
 	// Create Model Repository
-	modelRepository := repository.NewModelRepository(
-		logger,
-		rcloneClient,
-		modelRepositoryDir,
-		getRepositoryHandler(logger),
-		cli.EnvoyHost,
-		cli.EnvoyPort,
-		maxBackoffRetryModelDownload,
-	)
+	var modelRepository repository.ModelRepository
+	if serverTypeUsesLogicalModelLayout(cli.ServerType) {
+		modelRepository = repository.NewModelRepositoryLogicalLayout(
+			logger,
+			rcloneClient,
+			modelRepositoryDir,
+			getRepositoryHandler(logger),
+			cli.EnvoyHost,
+			cli.EnvoyPort,
+			maxBackoffRetryModelDownload,
+		)
+	} else {
+		modelRepository = repository.NewModelRepository(
+			logger,
+			rcloneClient,
+			modelRepositoryDir,
+			getRepositoryHandler(logger),
+			cli.EnvoyHost,
+			cli.EnvoyPort,
+			maxBackoffRetryModelDownload,
+		)
+	}
 
 	// Create model server control plane client
 	modelServerControlPlaneClient, err := controlplane_factory.CreateModelServerControlPlane(
@@ -309,6 +335,7 @@ func main() {
 			time.Duration(cli.UnloadGraceSeconds)*time.Second,
 			runningInsideK8s(),
 			*tlsOptions,
+			serverTypeUsesLogicalModelLayout(cli.ServerType),
 		),
 		logger,
 		modelRepository,

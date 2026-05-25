@@ -238,21 +238,21 @@ func (rp *reverseGRPCProxy) ModelInfer(ctx context.Context, r *v2.ModelInferRequ
 	if err != nil {
 		return nil, err
 	}
-	r.ModelName = internalModelName
-	r.ModelVersion = ""
-
 	if rp.modelScalingStatsCollector != nil {
 		// handle scaling metrics
 		rp.syncScalingMetrics(internalModelName)
 	}
 
 	startTime := time.Now()
-	err = rp.ensureLoadModel(r.ModelName)
+	err = rp.ensureLoadModel(internalModelName)
 	if err != nil {
 		elapsedTime := time.Since(startTime).Seconds()
 		go rp.metrics.AddModelInferMetrics(externalModelName, internalModelName, metrics.MethodTypeGrpc, elapsedTime, codes.NotFound.String())
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", r.ModelName, err))
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", internalModelName, err))
 	}
+
+	r.ModelName = rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+	r.ModelVersion = ""
 
 	// Create an outgoing context for the proxy call to service from incoming context
 	outgoingCtx, requestId := rp.createOutgoingCtxWithRequestId(ctx)
@@ -264,9 +264,7 @@ func (rp *reverseGRPCProxy) ModelInfer(ctx context.Context, r *v2.ModelInferRequ
 		rp.logger.WithError(err).Error("Failed to run infer request")
 	}
 	if retryForLazyReload(err) {
-		if v2Err := rp.stateManager.v2Client.LoadModel(internalModelName); v2Err != nil {
-			logger.WithError(v2Err).Warnf("error loading model %s", internalModelName)
-		}
+		rp.loadModelOnBackendForRetry(internalModelName)
 		resp, err = rp.getV2GRPCClient().ModelInfer(outgoingCtx, r, opts...)
 		if err != nil {
 			logger.WithError(err).Error("Failed to run infer request on second attempt")
@@ -367,6 +365,8 @@ func (rp *reverseGRPCProxy) ModelStreamInfer(stream v2.GRPCInferenceService_Mode
 		return status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", internalModelName, err))
 	}
 
+	backendModelName := rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+
 	// Create an outgoing context for the proxy call to service from incoming context
 	outgoingCtx, requestId := rp.createOutgoingCtxWithRequestId(ctx)
 
@@ -395,7 +395,7 @@ func (rp *reverseGRPCProxy) ModelStreamInfer(stream v2.GRPCInferenceService_Mode
 		stream.Recv,
 		clientStream.Send,
 		func(req *v2.ModelInferRequest) *v2.ModelInferRequest {
-			req.ModelName = internalModelName
+			req.ModelName = backendModelName
 			req.ModelVersion = ""
 			return req
 		},
@@ -436,18 +436,17 @@ func (rp *reverseGRPCProxy) ModelMetadata(ctx context.Context, r *v2.ModelMetada
 	if err != nil {
 		return nil, err
 	}
-	r.Name = internalModelName
-	r.Version = ""
 
-	if err := rp.ensureLoadModel(r.Name); err != nil {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", r.Name, err))
+	if err := rp.ensureLoadModel(internalModelName); err != nil {
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", internalModelName, err))
 	}
+
+	r.Name = rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+	r.Version = ""
 
 	resp, err := rp.getV2GRPCClient().ModelMetadata(ctx, r)
 	if retryForLazyReload(err) {
-		if v2Err := rp.stateManager.v2Client.LoadModel(internalModelName); v2Err != nil {
-			rp.logger.WithError(v2Err).Warnf("error loading model %s", internalModelName)
-		}
+		rp.loadModelOnBackendForRetry(internalModelName)
 		resp, err = rp.getV2GRPCClient().ModelMetadata(ctx, r)
 	}
 	return resp, err
@@ -458,18 +457,17 @@ func (rp *reverseGRPCProxy) ModelReady(ctx context.Context, r *v2.ModelReadyRequ
 	if err != nil {
 		return nil, err
 	}
-	r.Name = internalModelName
-	r.Version = ""
 
-	if err := rp.ensureLoadModel(r.Name); err != nil {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", r.Name, err))
+	if err := rp.ensureLoadModel(internalModelName); err != nil {
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", internalModelName, err))
 	}
+
+	r.Name = rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+	r.Version = ""
 
 	resp, err := rp.getV2GRPCClient().ModelReady(ctx, r)
 	if retryForLazyReload(err) {
-		if v2Err := rp.stateManager.v2Client.LoadModel(internalModelName); v2Err != nil {
-			rp.logger.WithError(v2Err).Warnf("error loading model %s", internalModelName)
-		}
+		rp.loadModelOnBackendForRetry(internalModelName)
 		resp, err = rp.getV2GRPCClient().ModelReady(ctx, r)
 	}
 	return resp, err
@@ -477,6 +475,15 @@ func (rp *reverseGRPCProxy) ModelReady(ctx context.Context, r *v2.ModelReadyRequ
 
 func (rp *reverseGRPCProxy) ensureLoadModel(modelId string) error {
 	return rp.stateManager.EnsureLoadModel(modelId)
+}
+
+// loadModelOnBackendForRetry asks the inference backend to load the model (e.g. after 404/Unavailable).
+// Uses the same model name as ModelNameForInferenceBackend so behaviour is consistent with EnsureLoadModel.
+func (rp *reverseGRPCProxy) loadModelOnBackendForRetry(internalModelName string) {
+	backendModelName := rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+	if err := rp.stateManager.v2Client.LoadModel(backendModelName); err != nil {
+		rp.logger.WithError(err).Warnf("error loading model on backend for retry %s (backend name: %s)", internalModelName, backendModelName)
+	}
 }
 
 func (rp *reverseGRPCProxy) getV2GRPCClient() v2.GRPCInferenceServiceClient {

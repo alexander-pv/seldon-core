@@ -237,7 +237,8 @@ func (rp *reverseHTTPProxy) addHandlers(proxy http.Handler) http.Handler {
 			go rp.metrics.AddModelInferMetrics(externalModelName, internalModelName, metrics.MethodTypeRest, elapsedTime, metrics.HttpCodeToString(http.StatusNotFound))
 			http.NotFound(w, r)
 		} else {
-			r.URL.Path = rewritePath(r.URL.Path, internalModelName)
+			backendModelName := rp.stateManager.ModelNameForInferenceBackend(internalModelName)
+			r.URL.Path = rewritePath(r.URL.Path, backendModelName)
 			rp.logger.Debugf("Calling %s", r.URL.Path)
 
 			proxy.ServeHTTP(w, r)

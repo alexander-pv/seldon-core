@@ -134,6 +134,31 @@ func (modelState *ModelState) modelNames() []string {
 	return models
 }
 
+// hasOtherVersionOfLogicalModel reports whether another loaded model shares the same
+// logical name (e.g. model-c_4 when versionedModelId is model-c_3). Used by tritonv2
+// to skip Triton Unload when only one version is being removed and another remains.
+func (modelState *ModelState) hasOtherVersionOfLogicalModel(versionedModelId string) bool {
+	logicalName, _, err := util.GetOrignalModelNameAndVersion(versionedModelId)
+	if err != nil {
+		return false
+	}
+	modelState.mu.RLock()
+	defer modelState.mu.RUnlock()
+	for name := range modelState.loadedModels {
+		if name == versionedModelId {
+			continue
+		}
+		otherLogical, _, err := util.GetOrignalModelNameAndVersion(name)
+		if err != nil {
+			continue
+		}
+		if otherLogical == logicalName {
+			return true
+		}
+	}
+	return false
+}
+
 func (modelState *ModelState) getVersionsForAllModels() []*agent.ModelVersion {
 	modelState.mu.RLock()
 	defer modelState.mu.RUnlock()

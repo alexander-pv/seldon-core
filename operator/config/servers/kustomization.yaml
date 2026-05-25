@@ -4,3 +4,4 @@
 resources:
 - mlserver.yaml
 - triton.yaml
+- tritonv2.yaml
