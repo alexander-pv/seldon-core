@@ -288,19 +288,25 @@ func TestCopyNonConfigFilesToModelRepo(t *testing.T) {
 			expectedRepoPaths: []string{"t"},
 		},
 		{
-			name:                 "files and folders",
-			rcloneFiles:          []string{"t"},
-			rcloneFolders:        []string{"folder"},
-			expectedRepoPaths:    []string{"t"},
-			notExpectedRepoPaths: []string{"folder"},
+			name:              "files and folders (folders now copied)",
+			rcloneFiles:       []string{"t"},
+			rcloneFolders:     []string{"folder"},
+			expectedRepoPaths: []string{"t", "folder"},
 		},
 		{
 			name:                 "files and folders with config.pbtxt and existing folders in repo",
 			rcloneFiles:          []string{"t", "config.pbtxt"},
 			rcloneFolders:        []string{"folder"},
 			repoFoldersToCreate:  []string{"1"},
-			expectedRepoPaths:    []string{"t", "1"},
-			notExpectedRepoPaths: []string{"folder", "config.pbtxt"},
+			expectedRepoPaths:    []string{"t", "folder", "1"},
+			notExpectedRepoPaths: []string{"config.pbtxt"},
+		},
+		{
+			name:                 "skip numeric directories 1-99999",
+			rcloneFiles:          []string{"t"},
+			rcloneFolders:        []string{"1", "42", "99999", "100000", "abc"},
+			expectedRepoPaths:    []string{"t", "100000", "abc"},
+			notExpectedRepoPaths: []string{"1", "42", "99999"},
 		},
 	}
 
@@ -308,32 +314,38 @@ func TestCopyNonConfigFilesToModelRepo(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rclonePath := t.TempDir()
 			repoPath := t.TempDir()
+
 			for _, filename := range test.rcloneFiles {
 				path := filepath.Join(rclonePath, filename)
 				err := os.WriteFile(path, []byte{}, fs.ModePerm)
 				g.Expect(err).To(BeNil())
 			}
-			for _, filename := range test.rcloneFolders {
-				path := filepath.Join(rclonePath, filename)
+
+			for _, folder := range test.rcloneFolders {
+				path := filepath.Join(rclonePath, folder)
 				err := os.MkdirAll(path, os.ModePerm)
 				g.Expect(err).To(BeNil())
 			}
-			for _, filename := range test.repoFoldersToCreate {
-				path := filepath.Join(repoPath, filename)
+
+			for _, folder := range test.repoFoldersToCreate {
+				path := filepath.Join(repoPath, folder)
 				err := os.MkdirAll(path, os.ModePerm)
 				g.Expect(err).To(BeNil())
 			}
+
 			err := copyNonConfigFilesToModelRepo(rclonePath, repoPath)
 			g.Expect(err).To(BeNil())
-			for _, filename := range test.expectedRepoPaths {
-				path := filepath.Join(repoPath, filename)
+
+			for _, p := range test.expectedRepoPaths {
+				path := filepath.Join(repoPath, p)
 				_, err := os.Stat(path)
-				g.Expect(err).To(BeNil())
+				g.Expect(err).To(BeNil(), "expected path missing: %s", p)
 			}
-			for _, filename := range test.notExpectedRepoPaths {
-				path := filepath.Join(repoPath, filename)
+
+			for _, p := range test.notExpectedRepoPaths {
+				path := filepath.Join(repoPath, p)
 				_, err := os.Stat(path)
-				g.Expect(err).ToNot(BeNil())
+				g.Expect(err).ToNot(BeNil(), "unexpected path exists: %s", p)
 			}
 		})
 	}

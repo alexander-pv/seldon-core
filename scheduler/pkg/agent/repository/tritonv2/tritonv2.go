@@ -47,12 +47,29 @@ func copyNonConfigFilesToModelRepo(src string, dst string) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && src != path { // Don't descend into directories
-			return filepath.SkipDir
+
+		// Compute relative path to preserve structure
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
 		}
-		// Copy non- config.pbtxt files to dst folder
-		if !info.IsDir() && filepath.Base(path) != TritonConfigFile {
-			err := copy2.Copy(path, filepath.Join(dst, filepath.Base(path)))
+
+		targetPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			// Skip directories named 1–99999 - Triton model versions
+			if path != src {
+				if n, err := strconv.Atoi(info.Name()); err == nil && n >= 1 && n <= 99999 {
+					return filepath.SkipDir
+				}
+			}
+			// Otherwise create directory
+			return os.MkdirAll(targetPath, info.Mode())
+		}
+
+		// Copy non-config.pbtxt files
+		if filepath.Base(path) != TritonConfigFile {
+			err := copy2.Copy(path, targetPath)
 			if err != nil {
 				return err
 			}
