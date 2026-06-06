@@ -205,6 +205,41 @@ func (p *IncrementalProcessor) removeRouteForServerInEnvoyCache(routeName string
 	return nil
 }
 
+// addModelProbeRoute keeps a mesh route to the model's server when the model is scaled down
+// (replicas=0) so OIP ModelReady reaches the agent and can return ready=false.
+func (p *IncrementalProcessor) addModelProbeRoute(routeName string, modelVersion *store.ModelVersion) error {
+	logger := p.logger.WithField("func", "addModelProbeRoute")
+	if !modelVersion.HasServer() {
+		return fmt.Errorf("model %s has no server for probe route", routeName)
+	}
+	server, err := p.modelStore.GetServer(modelVersion.Server(), false, false)
+	if err != nil {
+		return err
+	}
+	assignment := []int{0}
+	if _, ok := server.Replicas[0]; !ok {
+		assignment = assignment[:0]
+		for replicaIdx := range server.Replicas {
+			assignment = append(assignment, replicaIdx)
+			break
+		}
+		if len(assignment) == 0 {
+			return fmt.Errorf("server %s has no replicas for probe route on model %s", server.Name, routeName)
+		}
+	}
+	modelName := modelVersion.GetMeta().GetName()
+	modelVersionNumber := modelVersion.GetVersion()
+	httpClusterName, grpcClusterName := getClusterNames(modelName, modelVersionNumber)
+	p.xdsCache.AddClustersForRoute(routeName, modelName, httpClusterName, grpcClusterName, modelVersionNumber, assignment, server)
+	logPayloads := false
+	if modelVersion.GetDeploymentSpec() != nil {
+		logPayloads = modelVersion.GetDeploymentSpec().LogPayloads
+	}
+	p.xdsCache.AddRouteClusterTraffic(routeName, modelName, httpClusterName, grpcClusterName, modelVersionNumber, 100, logPayloads, false)
+	logger.Debugf("Added probe route for scaled-down model %s on server %s replica %v", routeName, server.Name, assignment)
+	return nil
+}
+
 func (p *IncrementalProcessor) updateEnvoyForModelVersion(routeName string, modelVersion *store.ModelVersion, server *store.ServerSnapshot, trafficPercent uint32, isMirror bool) {
 	logger := p.logger.WithField("func", "updateEnvoyForModelVersion")
 	assignment := modelVersion.GetAssignment()
@@ -540,7 +575,21 @@ func (p *IncrementalProcessor) modelUpdate(modelName string) error {
 	// decided this model can't be added for some reason. This allows batch deletion of routes
 	// to take place for errors as well as the successful path through the methods
 	modelRemoved := false
-	if !model.CanReceiveTraffic() {
+	// ModelScaledDown must be handled before CanReceiveTraffic: an older version may still be
+	// ModelAvailable in the store, so CanReceiveTraffic() stays true while replicas==0.
+	if !model.Deleted && latestModel != nil &&
+		latestModel.ModelState().State == store.ModelScaledDown && latestModel.HasServer() {
+		logger.Debugf("sync: Model scaled down - keeping probe route for %s", modelName)
+		if err := p.removeRouteForServerInEnvoyCache(modelName); err != nil {
+			logger.WithError(err).Errorf("Failed to clear routes before probe route for %s", modelName)
+			p.modelStore.UnlockModel(modelName)
+			return err
+		}
+		if err := p.addModelProbeRoute(modelName, latestModel); err != nil {
+			logger.WithError(err).Warnf("Failed to add probe route for scaled-down model %s", modelName)
+		}
+		modelRemoved = true
+	} else if !model.CanReceiveTraffic() {
 		logger.Debugf("sync: Model can't receive traffic - removing for %s", modelName)
 		if err := p.removeRouteForServerInEnvoyCache(modelName); err != nil {
 			logger.WithError(err).Errorf("Failed to remove model route from envoy %s", modelName)

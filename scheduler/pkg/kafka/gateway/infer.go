@@ -480,7 +480,7 @@ func (kc *InferKafkaHandler) Serve() {
 				}
 
 				if !kc.Exists(modelName) {
-					logger.Infof("Failed to find model %s in loaded models", modelName)
+					logger.Warnf("Model %s is not loaded, dropping inference request", modelName)
 					continue
 				}
 

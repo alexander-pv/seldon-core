@@ -187,9 +187,9 @@ func (g *GatewayGrpcServer) ModelReady(ctx context.Context, req *v2.ModelReadyRe
 	if err != nil {
 		if errors.Is(err, status2.PipelineNotFoundErr) {
 			return nil, status.Errorf(codes.NotFound, "Pipeline not found")
-		} else {
-			return nil, status.Errorf(codes.Internal, "%s", err.Error())
 		}
+		g.logger.WithError(err).Warnf("Pipeline %s step readiness check failed, reporting not ready", req.GetName())
+		return &v2.ModelReadyResponse{Ready: false}, nil
 	}
 	return &v2.ModelReadyResponse{Ready: ready}, nil
 }

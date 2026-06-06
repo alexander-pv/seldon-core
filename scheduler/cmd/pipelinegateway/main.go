@@ -53,6 +53,7 @@ const (
 	flagEnvoyHost             = "envoy-host"
 	flagEnvoyPort             = "envoy-port"
 	flagHealthPort            = "health-probe-port"
+	flagModelReadyProbe       = "model-ready-probe"
 )
 
 const (
@@ -81,6 +82,7 @@ var (
 	envoyHost              string
 	envoyPort              int
 	healthProbeServicePort int
+	modelReadyProbe        string
 	// TODO: add file watcher cfg using koanf and in the future read all file config in one file
 	k = koanf.New(".")
 )
@@ -105,6 +107,8 @@ func init() {
 	flag.StringVar(&envoyHost, flagEnvoyHost, "0.0.0.0", "Envoy host")
 	flag.IntVar(&envoyPort, flagEnvoyPort, defaultEnvoyPort, "Envoy port")
 	flag.IntVar(&healthProbeServicePort, flagHealthPort, defaultHealthProbePort, "Health probe port")
+	flag.StringVar(&modelReadyProbe, flagModelReadyProbe, status.ModelReadyProbeGrpc,
+		"Step model readiness probe for pipeline ModelReady: grpc (OIP via Envoy) or http (REST /v2/models/{name}/ready)")
 }
 
 // TODO: move to a common util
@@ -224,11 +228,12 @@ func main() {
 		errChan <- err
 	}()
 
-	restModelChecker, err := status.NewModelRestStatusCaller(logger, envoyHost, envoyPort)
+	modelReadyCaller, err := status.NewModelReadyCaller(logger, modelReadyProbe, envoyHost, envoyPort)
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to create REST modelchecker")
+		logger.WithError(err).Fatal("Failed to create model ready checker")
 	}
-	pipelineReadyChecker := status.NewSimpleReadyChecker(statusManager, restModelChecker)
+	logger.Infof("Pipeline step model readiness probe: %s (target %s:%d)", modelReadyProbe, envoyHost, envoyPort)
+	pipelineReadyChecker := status.NewSimpleReadyChecker(statusManager, modelReadyCaller)
 
 	grpcServer := pipeline.NewGatewayGrpcServer(grpcPort, logger, km, promMetrics, &tlsEnvoyOptions, pipelineReadyChecker)
 	go func() {

@@ -453,13 +453,27 @@ func (rp *reverseGRPCProxy) ModelMetadata(ctx context.Context, r *v2.ModelMetada
 }
 
 func (rp *reverseGRPCProxy) ModelReady(ctx context.Context, r *v2.ModelReadyRequest) (*v2.ModelReadyResponse, error) {
-	internalModelName, _, err := rp.extractModelNamesFromContext(ctx)
+	internalModelName, externalModelName, err := rp.extractModelNamesFromContext(ctx)
 	if err != nil {
+		modelName := externalModelName
+		if modelName == "" && r != nil {
+			modelName = r.GetName()
+		}
+		if modelName != "" {
+			return nil, util.EnrichGRPCModelReadyError(modelName, err)
+		}
 		return nil, err
 	}
 
-	if err := rp.ensureLoadModel(internalModelName); err != nil {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("Model %s not found (err: %s)", internalModelName, err))
+	displayName := externalModelName
+	if displayName == "" {
+		displayName = internalModelName
+	}
+
+	// Do not call EnsureLoadModel here: readiness must not trigger a load (e.g. spec.replicas: 0).
+	if !rp.stateManager.IsModelLoadedInCache(internalModelName) {
+		rp.logger.Warnf("Model %s not loaded on agent for ModelReady", internalModelName)
+		return &v2.ModelReadyResponse{Ready: false}, nil
 	}
 
 	r.Name = rp.stateManager.ModelNameForInferenceBackend(internalModelName)
@@ -469,6 +483,13 @@ func (rp *reverseGRPCProxy) ModelReady(ctx context.Context, r *v2.ModelReadyRequ
 	if retryForLazyReload(err) {
 		rp.loadModelOnBackendForRetry(internalModelName)
 		resp, err = rp.getV2GRPCClient().ModelReady(ctx, r)
+	}
+	if err != nil && util.IsGRPCModelNotReadyError(err) {
+		rp.logger.WithError(err).Warnf("Model %s not ready", internalModelName)
+		return &v2.ModelReadyResponse{Ready: false}, nil
+	}
+	if err != nil {
+		return nil, util.EnrichGRPCModelReadyError(displayName, err)
 	}
 	return resp, err
 }

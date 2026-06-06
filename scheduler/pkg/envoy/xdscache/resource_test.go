@@ -46,7 +46,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 2,
+			expectedDefaultRoutes: 4,
 			expectedMirrorRoutes:  0,
 		},
 		{
@@ -64,7 +64,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 2,
+			expectedDefaultRoutes: 4,
 			expectedMirrorRoutes:  0,
 		},
 		{
@@ -86,7 +86,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 6,
+			expectedDefaultRoutes: 8,
 			expectedMirrorRoutes:  0,
 		},
 		{
@@ -113,7 +113,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 6,
+			expectedDefaultRoutes: 8,
 			expectedMirrorRoutes:  2,
 		},
 		{
@@ -141,7 +141,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 6,
+			expectedDefaultRoutes: 8,
 			expectedMirrorRoutes:  0,
 		},
 		{
@@ -176,7 +176,7 @@ func TestMakeRoute(t *testing.T) {
 				})
 				return c
 			},
-			expectedDefaultRoutes: 6,
+			expectedDefaultRoutes: 8,
 			expectedMirrorRoutes:  2,
 		},
 	}
@@ -199,6 +199,26 @@ func TestMakeRoute(t *testing.T) {
 			g.Expect(len(rcMirror.VirtualHosts[0].Routes)).To(Equal(test.expectedMirrorRoutes))
 		})
 	}
+}
+
+func TestMakeUnknownModelCatchAllRoute(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	grpcRoute := makeUnknownModelCatchAllRoute(true)
+	g.Expect(grpcRoute.Name).To(Equal("unknown_model_grpc"))
+	g.Expect(grpcRoute.Match.Headers).To(HaveLen(1))
+	g.Expect(grpcRoute.Match.Headers[0].Name).To(Equal("seldon-model"))
+	g.Expect(grpcRoute.Match.Headers[0].GetPresentMatch()).To(BeTrue())
+	g.Expect(grpcRoute.Match.GetGrpc()).NotTo(BeNil())
+	g.Expect(grpcRoute.GetDirectResponse().Status).To(Equal(uint32(200)))
+	g.Expect(grpcRoute.ResponseHeadersToAdd).To(HaveLen(3))
+	g.Expect(grpcRoute.ResponseHeadersToAdd[1].Header.Key).To(Equal("grpc-status"))
+	g.Expect(grpcRoute.ResponseHeadersToAdd[1].Header.Value).To(Equal("5"))
+
+	httpRoute := makeUnknownModelCatchAllRoute(false)
+	g.Expect(httpRoute.Name).To(Equal("unknown_model_http"))
+	g.Expect(httpRoute.Match.Headers[0].Name).To(Equal("seldon-model"))
+	g.Expect(httpRoute.GetDirectResponse().Status).To(Equal(uint32(404)))
 }
 
 func TestGetRouteName(t *testing.T) {

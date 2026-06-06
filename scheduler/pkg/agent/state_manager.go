@@ -191,6 +191,11 @@ func (manager *LocalStateManager) UnloadModelVersion(modelVersionDetails *agent.
 	return nil
 }
 
+// IsModelLoadedInCache reports whether the model is present in the agent LRU cache (loaded on this replica).
+func (manager *LocalStateManager) IsModelLoadedInCache(modelId string) bool {
+	return manager.cache.Exists(modelId, false)
+}
+
 // this should be called from data plane (on incoming inference)
 func (manager *LocalStateManager) EnsureLoadModel(modelId string) error {
 	manager.logger.Debugf("Ensure that model %s is loaded in memory", modelId)

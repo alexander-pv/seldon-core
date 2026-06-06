@@ -53,6 +53,8 @@ const (
 	DefaultRouteConfigurationName = "listener_0"
 	MirrorRouteConfigurationName  = "listener_1"
 	TLSRouteConfigurationName     = "listener_tls"
+	// Catch-all routes for requests with seldon-model set but no matching model/pipeline route.
+	unknownModelCatchAllRouteCount = 2
 
 	// circuitBreakerMaxRetry max parallel retries
 	circuitBreakerMaxRetry  = 5
@@ -241,7 +243,8 @@ func makeEndpoint(clusterName string, eps map[string]Endpoint) *endpoint.Cluster
 func makeRoutes(routes *util.CountedSyncMap[Route], pipelines *util.CountedSyncMap[PipelineRoute]) (*route.RouteConfiguration, *route.RouteConfiguration) {
 	rts := make([]*route.Route, 2*(routes.Length()+pipelines.Length())+
 		countModelStickySessions(routes)+
-		countPipelineStickySessions(pipelines))
+		countPipelineStickySessions(pipelines)+
+		unknownModelCatchAllRouteCount)
 
 	for i := range rts {
 		rts[i] = &route.Route{
@@ -313,12 +316,17 @@ func makeRoutes(routes *util.CountedSyncMap[Route], pipelines *util.CountedSyncM
 		return true
 	})
 
+	// Last: seldon-model set but no per-model/pipeline route → 404 / gRPC NOT_FOUND (not UNIMPLEMENTED).
+	rts[rtsIndex] = makeUnknownModelCatchAllRoute(false)
+	rtsIndex++
+	rts[rtsIndex] = makeUnknownModelCatchAllRoute(true)
+
 	return &route.RouteConfiguration{
 			Name: DefaultRouteConfigurationName,
 			VirtualHosts: []*route.VirtualHost{{
 				Name:    "seldon_service",
 				Domains: []string{"*"},
-				Routes:  rts,
+				Routes:  rts[:rtsIndex+1],
 			}},
 		},
 		&route.RouteConfiguration{
@@ -433,6 +441,63 @@ var (
 		{Header: &core.HeaderValue{Key: SeldonLoggingHeader, Value: "true"}},
 	}
 )
+
+const unknownModelGrpcMessage = "model does not exist or is not routed in the mesh"
+
+func unknownModelGrpcResponseHeaders() []*core.HeaderValueOption {
+	overwrite := core.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD
+	return []*core.HeaderValueOption{
+		{
+			Header:       &core.HeaderValue{Key: "content-type", Value: "application/grpc"},
+			AppendAction: overwrite,
+		},
+		{
+			Header:       &core.HeaderValue{Key: "grpc-status", Value: "5"}, // NOT_FOUND
+			AppendAction: overwrite,
+		},
+		{
+			Header:       &core.HeaderValue{Key: "grpc-message", Value: unknownModelGrpcMessage},
+			AppendAction: overwrite,
+		},
+	}
+}
+
+// makeUnknownModelCatchAllRoute matches OIP traffic with seldon-model set but no specific model route.
+// gRPC uses HTTP 200 + grpc-status headers; bare HTTP 404 often surfaces to clients as UNIMPLEMENTED.
+func makeUnknownModelCatchAllRoute(isGrpc bool) *route.Route {
+	r := &route.Route{
+		Match: &route.RouteMatch{
+			Headers: []*route.HeaderMatcher{
+				{
+					Name: util.SeldonModelHeader,
+					HeaderMatchSpecifier: &route.HeaderMatcher_PresentMatch{
+						PresentMatch: true,
+					},
+				},
+			},
+		},
+	}
+	if isGrpc {
+		r.Name = "unknown_model_grpc"
+		r.Match.PathSpecifier = modelRouteMatchPathGrpc
+		r.Match.Grpc = &route.RouteMatch_GrpcRouteMatchOptions{}
+		r.Action = &route.Route_DirectResponse{
+			DirectResponse: &route.DirectResponseAction{
+				Status: 200,
+			},
+		}
+		r.ResponseHeadersToAdd = unknownModelGrpcResponseHeaders()
+	} else {
+		r.Name = "unknown_model_http"
+		r.Match.PathSpecifier = modelRouteMatchPathHttp
+		r.Action = &route.Route_DirectResponse{
+			DirectResponse: &route.DirectResponseAction{
+				Status: 404,
+			},
+		}
+	}
+	return r
+}
 
 func getPipelineClusterName(clusterPrefix string, isGrpc bool) string {
 	if isGrpc {
